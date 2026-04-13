@@ -1,15 +1,45 @@
 #!/usr/bin/env bash
 # cmux-window-status.sh <window-index>
 #
-# Prints a single icon representing the rolled-up agent status of the
-# given window (in the current session). Intended for use inside
-# tmux's window-status-format via `#(... #I)`.
+# Prints the Claude Code agent status icon for the given tmux window index.
+# Designed for use inside tmux's window-status-format via `#(... #I)`.
 #
-# Output: one of ⚡ ⠋ ✓ ○  (plus a trailing space). Always two columns so
-# the tab width never changes — prevents status-bar reflow flicker.
+# Output is always 2 columns: either `ICON ` (icon + space) or 2 spaces —
+# so the tab width never changes, which prevents status-bar reflow flicker.
 
-CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$CURRENT_DIR/cmux-common.sh"
+_SPINNER=(⋆ ✦ ✸ ✦)
+
+icon_for() {
+    case "$1" in
+        waiting)  echo "◷" ;;
+        thinking) echo "${_SPINNER[$(( $(date +%s) % ${#_SPINNER[@]} ))]}" ;;
+        done)     echo "✓" ;;
+        idle|*)   echo "·" ;;
+    esac
+}
+
+# True if any descendant process of the pane's root pid has argv matching
+# a known agent. tmux's #{pane_current_command} is unreliable (Claude Code
+# rewrites its process title to its version string), so we walk the tree.
+has_agent_in_window() {
+    local win_target="$1"
+    local pids
+    pids=$(tmux list-panes -t "$win_target" -F '#{pane_pid}' 2>/dev/null)
+    [ -z "$pids" ] && return 1
+
+    ps -ao pid=,ppid=,args= 2>/dev/null | awk -v roots="$pids" '
+        BEGIN { n = split(roots, r, /[[:space:]]+/); for (i=1; i<=n; i++) if (r[i] != "") tree[r[i]] = 1 }
+        { pid=$1; ppid=$2; $1=""; $2=""; sub(/^  */,"",$0); argv[pid]=$0; parent[pid]=ppid }
+        END {
+            changed = 1
+            while (changed) {
+                changed = 0
+                for (p in parent) if (!(p in tree) && (parent[p] in tree)) { tree[p] = 1; changed = 1 }
+            }
+            for (p in tree) if (argv[p] ~ /claude|aider|cursor|copilot|cline/) { exit 0 }
+            exit 1
+        }'
+}
 
 blank() { printf '  '; exit 0; }
 
@@ -17,33 +47,22 @@ win_idx="${1:-}"
 [ -z "$win_idx" ] && blank
 
 session_name=$(tmux display-message -p '#{session_name}' 2>/dev/null)
-[ -z "$session_name" ] && blank
+session_id=$(tmux display-message -p '#{session_id}' 2>/dev/null)
+[ -z "$session_name" ] || [ -z "$session_id" ] && blank
 
-win_target="${session_name}:${win_idx}"
+has_agent_in_window "${session_name}:${win_idx}" || blank
 
-agent_found=0
-panes=$(tmux list-panes -t "$win_target" -F '#{pane_id}' 2>/dev/null)
-for p in $panes; do
-    if is_agent_pane "$p"; then
-        agent_found=1
-        break
-    fi
-done
-
-[ "$agent_found" = "0" ] && blank
-
-status=$(get_window_status "$win_idx")
+state_file="${TMPDIR:-/tmp}/tmux-cmux/${session_id}/win-${win_idx}"
+status="idle"
+[ -f "$state_file" ] && status=$(cat "$state_file")
 
 # Decay stale `waiting` → idle. Claude Code doesn't fire a hook when a
-# notification is dismissed, so `waiting` can stick long after the user has
-# responded. `thinking` must NOT decay (long tasks legitimately take minutes
-# without firing another hook). `done`/`idle` are terminal and don't decay.
-if [ "$status" = "waiting" ]; then
-    state_file="${TMPDIR:-/tmp}/tmux-cmux/$(tmux display-message -p '#{session_id}' 2>/dev/null)/win-${win_idx}"
-    if [ -f "$state_file" ]; then
-        age=$(( $(date +%s) - $(stat -f %m "$state_file" 2>/dev/null || stat -c %Y "$state_file" 2>/dev/null || echo 0) ))
-        [ "$age" -gt 30 ] && status="idle"
-    fi
+# notification is dismissed, so `waiting` can stick long after the user
+# responded. `thinking` must NOT decay (long tasks legitimately run for
+# minutes without firing another hook). `done`/`idle` are terminal.
+if [ "$status" = "waiting" ] && [ -f "$state_file" ]; then
+    age=$(( $(date +%s) - $(stat -f %m "$state_file" 2>/dev/null || stat -c %Y "$state_file" 2>/dev/null || echo 0) ))
+    [ "$age" -gt 30 ] && status="idle"
 fi
 
-printf '%s ' "$(status_icon "$status")"
+printf '%s ' "$(icon_for "$status")"
