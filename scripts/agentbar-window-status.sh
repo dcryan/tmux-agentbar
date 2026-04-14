@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cmux-window-status.sh <window-index>
+# agentbar-window-status.sh <window-index>
 #
 # Prints the Claude Code agent status icon for the given tmux window index.
 # Designed for use inside tmux's window-status-format via `#(... #I)`.
@@ -52,7 +52,7 @@ session_id=$(tmux display-message -p '#{session_id}' 2>/dev/null)
 
 has_agent_in_window "${session_name}:${win_idx}" || blank
 
-state_file="${TMPDIR:-/tmp}/tmux-cmux/${session_id}/win-${win_idx}"
+state_file="${TMPDIR:-/tmp}/tmux-agentbar/${session_id}/win-${win_idx}"
 status="idle"
 [ -f "$state_file" ] && status=$(cat "$state_file")
 

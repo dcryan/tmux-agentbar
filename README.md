@@ -1,106 +1,74 @@
-# tmux-cmux
+# tmux-agentbar
 
-A tmux plugin inspired by [cmux](https://cmux.dev) — session-level AI agent workspace management.
+Per-window AI agent status indicators for tmux, inspired by [cmux](https://cmux.dev).
 
-## Concept
+When Claude Code (or any compatible agent) runs inside a tmux window, the tab shows a live status icon and highlights via the tmux bell when the agent needs your attention — so you can leave background agents running and glance at the status bar to see which ones are waiting, thinking, or done.
 
-```
-Session: "work"
-├── Window 0: cmux-dash  ← persistent dashboard (auto-refreshing)
-├── Window 1: api-server  → claude: thinking ⠋
-├── Window 2: frontend    → claude: waiting  ⚡
-├── Window 3: infra       → claude: done     ✓
-└── Window 4: docs        → claude: idle     ○
-```
+## How it works
 
-Each **window = a project**. The dashboard (window 0) shows all windows with their rolled-up agent status. Multiple Claude instances in one window get aggregated to the "worst" status (waiting > thinking > done > idle).
+Two scripts, coupled by small state files in `$TMPDIR/tmux-agentbar/<session-id>/win-<N>`:
 
-## Features
-
-- **Session Dashboard** — Persistent window showing all projects and their agent statuses at a glance
-- **Smart Status Detection** — Monitors agent panes to detect: idle, thinking, waiting for input, done
-- **Status Rollup** — Multiple agent panes per window roll up to the most urgent status
-- **Desktop Notifications** — OS-native alerts when agents need input (macOS + Linux)
-- **Status Bar** — Compact segment: `⚡2 ⠋1 ✓3 feat/oauth●`
-- **Project Launcher** — Spawn pre-configured window layouts with agent running
-
-## Requirements
-
-- tmux 3.2+ (for `display-popup`)
-- bash 4+
-- git (optional, for branch display)
+- `scripts/agentbar-report.sh <status>` — invoked from agent hooks. Writes the status, and for `waiting` / `done` rings the terminal bell so tmux flips the tab to its `window-status-bell-style` (reverse video by default) until you focus it.
+- `scripts/agentbar-window-status.sh <window-index>` — invoked from tmux's `window-status-format` every second. Walks the pane's process tree to detect running agents, reads the state file, prints a 2-column status icon.
 
 ## Install
 
-### With TPM
+Clone the repo:
 
 ```bash
-set -g @plugin 'your-user/tmux-cmux'
+git clone https://github.com/dcryan/tmux-agentbar ~/Development/tmux-agentbar
 ```
 
-Then `prefix + I` to install.
+### tmux (`~/.tmux.conf`)
 
-### Manual
+Render the per-window icon. tmux's default `monitor-bell on` + `window-status-bell-style reverse` handle the tab highlight — no extra tmux config needed beyond the format strings:
 
-```bash
-git clone https://github.com/your-user/tmux-cmux ~/.tmux/plugins/tmux-cmux
-echo 'run-shell ~/.tmux/plugins/tmux-cmux/tmux-cmux.tmux' >> ~/.tmux.conf
-tmux source ~/.tmux.conf
+```tmux
+set -g status-interval 1
+setw -g window-status-format         "#I #W #(~/Development/tmux-agentbar/scripts/agentbar-window-status.sh #I)"
+setw -g window-status-current-format "#I #W #(~/Development/tmux-agentbar/scripts/agentbar-window-status.sh #I)"
 ```
 
-## Key Bindings
+### Claude Code (`~/.claude/settings.json`)
 
-| Key           | Action                           |
-|---------------|----------------------------------|
-| `prefix + M`  | Toggle session dashboard         |
-| `prefix + C`  | Launch new project window        |
-| `prefix + N`  | Notification summary popup       |
-| `0-9`         | (in dashboard) Jump to window    |
+Wire status reporting into the hook events:
 
-## CLI
-
-```bash
-# Add scripts/ to your PATH
-export PATH="$HOME/.tmux/plugins/tmux-cmux/scripts:$PATH"
-
-cmux launch -d ~/projects/api -s split-h     # new project window
-cmux dash                                      # toggle dashboard
-cmux windows                                   # list window statuses
-cmux notify start                              # start background monitor
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/Development/tmux-agentbar/scripts/agentbar-report.sh thinking" }] }],
+    "Notification":     [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/Development/tmux-agentbar/scripts/agentbar-report.sh waiting"  }] }],
+    "Stop":             [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/Development/tmux-agentbar/scripts/agentbar-report.sh done"     }] }],
+    "SessionStart":     [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/Development/tmux-agentbar/scripts/agentbar-report.sh idle"     }] }]
+  }
+}
 ```
 
-## Configuration
+## Status model
 
-```bash
-# ~/.tmux.conf (set before loading plugin)
-set -g @cmux-agent-cmd     "claude"                    # agent binary
-set -g @cmux-poll-interval "3"                         # scan frequency (seconds)
-set -g @cmux-notify-style  "fg=black,bg=blue,bold"     # pane highlight style
+| Status     | Icon        | Meaning                            | Bell?   |
+|------------|-------------|------------------------------------|---------|
+| `idle`     | `·`         | Session started, no activity       | no      |
+| `thinking` | `✢✳✶✻` (spinner) | Agent is working              | no      |
+| `waiting`  | `◷`         | Agent is waiting on user input     | **yes** |
+| `done`     | `✓`         | Agent finished its turn            | **yes** |
+
+Stale `waiting` decays to `idle` after 30s — Claude Code doesn't fire a hook when a notification is dismissed, so without the decay the icon would stick.
+
+## Extending to other agents
+
+`agentbar-window-status.sh` only renders an icon for windows whose process tree contains a known agent. The current matcher is:
+
+```
+claude|aider|cursor|copilot|cline
 ```
 
-## Status Model
+To add another agent, append its binary name to that regex in `agentbar-window-status.sh`. Any tool whose hooks (or wrapper) can call `agentbar-report.sh` with one of the four statuses will integrate.
 
-| Status     | Icon | Meaning                           |
-|------------|------|-----------------------------------|
-| `idle`     | ○    | No agent running or not started   |
-| `thinking` | ⠋    | Agent actively working            |
-| `waiting`  | ⚡    | Agent needs user input            |
-| `done`     | ✓    | Agent finished task               |
+## Requirements
 
-When a window has multiple agent panes, the **most urgent** status wins:
-`waiting > thinking > done > idle`
-
-## Extending for Other Agents
-
-In `scripts/cmux-common.sh`, add to `is_agent_pane()`:
-
-```bash
-case "$cmd" in
-    claude|aider|cursor|your-agent) return 0 ;;
-esac
-```
-
-In `scripts/cmux-notify.sh`, add detection patterns to `WAIT_PATTERNS`, `THINKING_PATTERNS`, or `DONE_PATTERNS`.
+- tmux 3.2+
+- bash 3.2+ (macOS default is fine)
 
 ## License
 
