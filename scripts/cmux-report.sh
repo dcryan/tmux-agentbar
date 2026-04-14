@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # cmux-report.sh <status>
 #
-# Writes the given status for the tmux window the caller is running in.
-# Designed to be invoked from Claude Code hooks (UserPromptSubmit, Stop,
-# Notification, SessionStart). Silently no-ops when not inside tmux.
+# Reports an agent status for the caller's tmux window: writes the status to
+# a state file (read by cmux-window-status.sh for the per-tab icon) and, for
+# attention-worthy statuses, emits a terminal BEL so tmux flips the tab to
+# its window-status-bell-style (reverse video by default) until the user
+# focuses it. Designed to be invoked from Claude Code hooks (UserPromptSubmit,
+# Stop, Notification, SessionStart). Silently no-ops when not inside tmux.
 #
 # Status must be one of: idle | thinking | waiting | done
+# Bell fires for: waiting, done (agent needs user / agent finished)
 
 status="${1:-}"
 case "$status" in
@@ -24,3 +28,7 @@ win_idx=$(tmux display-message -p -t "$TMUX_PANE" '#{window_index}' 2>/dev/null)
 state_dir="${TMPDIR:-/tmp}/tmux-cmux/${session_id}"
 mkdir -p "$state_dir" 2>/dev/null
 printf '%s\n' "$status" > "$state_dir/win-${win_idx}"
+
+case "$status" in
+    waiting|done) printf '\a' >/dev/tty 2>/dev/null || true ;;
+esac
