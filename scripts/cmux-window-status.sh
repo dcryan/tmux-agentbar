@@ -7,7 +7,7 @@
 # Output is always 2 columns: either `ICON ` (icon + space) or 2 spaces —
 # so the tab width never changes, which prevents status-bar reflow flicker.
 
-_SPINNER=(⋆ ✦ ✸ ✦)
+_SPINNER=(✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳)
 
 icon_for() {
     case "$1" in
