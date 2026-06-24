@@ -8,13 +8,15 @@
 # so the tab width never changes, which prevents status-bar reflow flicker.
 
 _SPINNER=(✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳)
+_COMPACT=(◌ ○ ◎ ◉ ● ◉ ◎ ○)
 
 icon_for() {
     case "$1" in
-        waiting)  echo "◷" ;;
-        thinking) echo "${_SPINNER[$(( $(date +%s) % ${#_SPINNER[@]} ))]}" ;;
-        done)     echo "✓" ;;
-        idle|*)   echo "·" ;;
+        waiting)   echo "◷" ;;
+        thinking)  echo "${_SPINNER[$(( $(date +%s) % ${#_SPINNER[@]} ))]}" ;;
+        compacting) echo "${_COMPACT[$(( $(date +%s) % ${#_COMPACT[@]} ))]}" ;;
+        done)      echo "✓" ;;
+        idle|*)    echo "·" ;;
     esac
 }
 
@@ -24,8 +26,8 @@ icon_for() {
 has_agent_in_window() {
     local win_target="$1"
     local pids
-    pids=$(tmux list-panes -t "$win_target" -F '#{pane_pid}' 2>/dev/null)
-    [ -z "$pids" ] && return 1
+    pids=$(tmux list-panes -t "$win_target" -F '#{pane_pid}' 2>/dev/null | tr '\n' ' ')
+    [ -z "${pids// /}" ] && return 1
 
     ps -ao pid=,ppid=,args= 2>/dev/null | awk -v roots="$pids" '
         BEGIN { n = split(roots, r, /[[:space:]]+/); for (i=1; i<=n; i++) if (r[i] != "") tree[r[i]] = 1 }
@@ -54,7 +56,8 @@ has_agent_in_window "${session_name}:${win_idx}" || blank
 
 state_file="${TMPDIR:-/tmp}/tmux-agentbar/${session_id}/win-${win_idx}"
 status="idle"
-[ -f "$state_file" ] && status=$(cat "$state_file")
+# line 1 only — line 2 (if present) holds the accountUuid for agentbar-status-right.sh
+[ -f "$state_file" ] && status=$(sed -n '1p' "$state_file")
 
 # Decay stale `waiting` → idle. Claude Code doesn't fire a hook when a
 # notification is dismissed, so `waiting` can stick long after the user

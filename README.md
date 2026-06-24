@@ -55,6 +55,52 @@ Wire status reporting into the hook events:
 
 Stale `waiting` decays to `idle` after 30s — Claude Code doesn't fire a hook when a notification is dismissed, so without the decay the icon would stick.
 
+## Claude usage meters
+
+A shared provider publishes live Claude rate-limit usage (the rolling **5-hour** and
+**7-day** windows) that any UI can consume — the tmux `status-right`, the cmux custom
+sidebar, etc. **One writer, many readers.**
+
+### Identity: account vs organization
+
+Rate limits are owned by the **organization**, not the user account. So usage is keyed
+by `organizationUuid` while a session/window is tagged by `accountUuid`. Identity is
+read from `${CLAUDE_CONFIG_DIR:-~/.claude}/.claude.json` → `.oauthAccount`, so a project
+that sets `CLAUDE_CONFIG_DIR` (e.g. via direnv) resolves to its own account/subscription.
+
+### Scripts
+
+| Script | Role |
+|--------|------|
+| `claude-account.sh {id\|org\|label\|color\|sync}` | resolve the active account/org; `sync` writes the registry below |
+| `claude-usage.sh {--print\|--json\|--raw\|--refresh}` | fetch usage from Anthropic's (unofficial) `oauth/usage` endpoint; `--refresh` writes the cache |
+| `usage-refresh.sh` | fire-and-forget wrapper: `--refresh` + repaint cmux, backgrounded (for hooks) |
+| `cmux-usage-sentinels.sh` | paint usage into the cmux sidebar via hidden "sentinel" workspaces (cmux-only) |
+| `agentbar-status-right.sh <session_id> <window_index>` | emit a tmux `status-right` segment for the active window |
+
+### State (shared cache)
+
+```
+${XDG_STATE_HOME:-~/.local/state}/agentbar/
+├── accounts/<accountUuid>/meta.json   # identity + display color
+└── orgs/<organizationUuid>/
+    ├── label                          # "PERSONAL" | "ACME (max 20x)"  (hand-editable)
+    └── usage.json                     # { five_hour:{pct,resets_in,spark}, seven_day:{…}, stale }
+
+$TMPDIR/tmux-agentbar/<session_id>/win-<idx>   # line 1: status   line 2: accountUuid
+```
+
+The meter glyph is a single vertical-block sparkline ` ▁▂▃▄▅▆▇█` (1/8 resolution), like
+the Claude Code statusline.
+
+### Wiring
+
+- **Claude Code hooks** (`~/.claude/settings.json`): `SessionStart` → `claude-account.sh sync`;
+  `UserPromptSubmit` + `Stop` → `usage-refresh.sh` (`"async": true`).
+- **tmux** (`~/.tmux.conf`): `set -g status-right "#(…/agentbar-status-right.sh #{session_id} #{window_index})"`.
+- **cmux**: `automation.socketControlMode: "automation"` in `cmux.json`, plus the
+  `usage.swift` custom sidebar (matches sentinel titles by the `◈ ` prefix).
+
 ## Extending to other agents
 
 `agentbar-window-status.sh` only renders an icon for windows whose process tree contains a known agent. The current matcher is:
