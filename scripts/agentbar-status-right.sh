@@ -12,6 +12,20 @@
 set -uo pipefail
 
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agentbar"
+DIM="colour244"   # muted gray for the reset countdown
+
+# Severity color for a usage percentage — warms up as the window fills, like the
+# Claude Code statusline. ANSI names (red/yellow/green) follow the terminal theme;
+# orange is a fixed 256-color slot. Thresholds are easy to retune.
+sev_color() {
+  local p="${1:-0}"
+  if   [ "$p" -ge 90 ]; then printf 'red'
+  elif [ "$p" -ge 75 ]; then printf 'colour208'   # orange
+  elif [ "$p" -ge 50 ]; then printf 'yellow'
+  else                       printf 'green'
+  fi
+}
+
 sid="${1:-}"; win="${2:-}"
 [ -n "$sid" ] && [ -n "$win" ] || exit 0
 
@@ -31,10 +45,15 @@ label=$(cat "$STATE/orgs/$org/label" 2>/dev/null || jq -r '.organizationName // 
 
 usage="$STATE/orgs/$org/usage.json"
 if [ -f "$usage" ]; then
-  fhp=$(jq -r '.five_hour.pct // 0' "$usage"); fhs=$(jq -r '.five_hour.spark // " "' "$usage")
-  shp=$(jq -r '.seven_day.pct // 0' "$usage"); shs=$(jq -r '.seven_day.spark // " "' "$usage")
-  warn=""; [ "$(jq -r '.stale // false' "$usage")" = true ] && warn=" #[fg=colour1]⚠#[default]"
-  printf '#[fg=%s]%s#[default] 5h %s %s%% · 7d %s %s%%%s ' "$color" "$label" "$fhs" "$fhp" "$shs" "$shp" "$warn"
+  fhp=$(jq -r '.five_hour.pct // 0' "$usage"); fhs=$(jq -r '.five_hour.spark // " "' "$usage"); fhr=$(jq -r '.five_hour.resets_in // "?"' "$usage")
+  shp=$(jq -r '.seven_day.pct // 0' "$usage"); shs=$(jq -r '.seven_day.spark // " "' "$usage"); shr=$(jq -r '.seven_day.resets_in // "?"' "$usage")
+  warn=""; [ "$(jq -r '.stale // false' "$usage")" = true ] && warn=" #[fg=red]⚠#[default]"
+  # label in the org color; each window's spark+pct in its severity color; reset countdown dim
+  printf '#[fg=%s]%s#[default] 5h #[fg=%s]%s %s%%#[default] #[fg=%s](%s)#[default] · 7d #[fg=%s]%s %s%%#[default] #[fg=%s](%s)#[default]%s ' \
+    "$color" "$label" \
+    "$(sev_color "$fhp")" "$fhs" "$fhp" "$DIM" "$fhr" \
+    "$(sev_color "$shp")" "$shs" "$shp" "$DIM" "$shr" \
+    "$warn"
 else
   printf '#[fg=%s]%s#[default] ' "$color" "$label"
 fi
