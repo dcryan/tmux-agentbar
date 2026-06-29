@@ -9,7 +9,7 @@ When Claude Code (or any compatible agent) runs inside a tmux window, the tab sh
 Two scripts, coupled by small state files in `$TMPDIR/tmux-agentbar/<session-id>/win-<N>`:
 
 - `scripts/agentbar-report.sh <status>` — invoked from agent hooks. Writes the status, and for `waiting` / `done` rings the terminal bell so tmux flips the tab to its `window-status-bell-style` (reverse video by default) until you focus it.
-- `scripts/agentbar-window-status.sh <window-index>` — invoked from tmux's `window-status-format` every second. Walks the pane's process tree to detect running agents, reads the state file, prints a 2-column status icon.
+- `scripts/agentbar-window-status.sh <window-index> [fallback-name]` — invoked from tmux's `window-status-format` every second. Walks the pane's process tree to detect running agents, reads the state file, and renders the tab label: `<name> <status-icon>`. For agent windows the `<name>` is the **Claude session name** (Claude Code's terminal title, `#{pane_title}`, minus its leading status glyph); for everything else it's the real window name passed in as `[fallback-name]`.
 
 ## Install
 
@@ -21,13 +21,15 @@ git clone https://github.com/dcryan/tmux-agentbar ~/Development/tmux-agentbar
 
 ### tmux (`~/.tmux.conf`)
 
-Render the per-window icon. tmux's default `monitor-bell on` + `window-status-bell-style reverse` handle the tab highlight — no extra tmux config needed beyond the format strings:
+Render the per-window label + icon. The script now owns the whole label, so drop the literal `#W` and pass it in as the fallback name instead (quoted, since window names can contain spaces). tmux's default `monitor-bell on` + `window-status-bell-style reverse` handle the tab highlight — no extra tmux config needed beyond the format strings:
 
 ```tmux
 set -g status-interval 1
-setw -g window-status-format         "#I #W #(~/Development/tmux-agentbar/scripts/agentbar-window-status.sh #I)"
-setw -g window-status-current-format "#I #W #(~/Development/tmux-agentbar/scripts/agentbar-window-status.sh #I)"
+setw -g window-status-format         "#I #(~/Development/tmux-agentbar/scripts/agentbar-window-status.sh #I '#W' '#{session_id}')"
+setw -g window-status-current-format "#I #(~/Development/tmux-agentbar/scripts/agentbar-window-status.sh #I '#W' '#{session_id}')"
 ```
+
+For windows running a Claude agent, the tab shows the **session name** instead of the bare window name — e.g. `2 gmail subject line search ◷` rather than `2 claude ◷`. The name comes from Claude Code's terminal title and updates live; `#W` itself is never changed (so `automatic-rename`, `choose-tree`, etc. are unaffected). Cap the displayed length with `AGENTBAR_NAME_MAX` (default 40).
 
 ### Claude Code (`~/.claude/settings.json`)
 
